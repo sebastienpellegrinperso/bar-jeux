@@ -17,17 +17,19 @@ def get_gsheet_client():
   if os.path.exists("service_account.json"):
     gc = gspread.service_account(filename="service_account.json")
   else:
-    # Récupération des secrets sous forme de dictionnaire standard
     creds_dict = dict(st.secrets["gcp_service_account"])
-    
-    # Nettoyage et normalisation de la clé privée pour éviter l'erreur de padding
-    private_key = creds_dict["private_key"]
-    if isinstance(private_key, str):
-      # Remplace les éventuels \n textuels par de vrais retours à la ligne
-      private_key = private_key.replace("\\n", "\n")
-      creds_dict["private_key"] = private_key
 
-    # Utilisation de la méthode de dictionnaire sécurisée de gspread
+    # --- DÉBOGAGE : Affiche ce que Streamlit reçoit réellement ---
+    raw_key = creds_dict.get("private_key", "")
+    st.write("🔍 **Diagnostic de la clé privée :**")
+    st.code(repr(raw_key))  # Affiche les caractères cachés (\n, espaces, etc.)
+
+    # Traitement de correction
+    clean_key = (
+        raw_key.replace("\\n", "\n").strip()
+    )  # Remplace les \\n et retire les espaces superflus
+    creds_dict["private_key"] = clean_key
+
     gc = gspread.service_account_from_dict(creds_dict)
 
   sh = gc.open("Ludotrotter_Base_Donnees")
