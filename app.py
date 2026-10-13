@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 import gspread
 import pandas as pd
@@ -17,18 +19,10 @@ def get_gsheet_client():
   if os.path.exists("service_account.json"):
     gc = gspread.service_account(filename="service_account.json")
   else:
-    creds_dict = dict(st.secrets["gcp_service_account"])
-
-    # --- DÉBOGAGE : Affiche ce que Streamlit reçoit réellement ---
-    raw_key = creds_dict.get("private_key", "")
-    st.write("🔍 **Diagnostic de la clé privée :**")
-    st.code(repr(raw_key))  # Affiche les caractères cachés (\n, espaces, etc.)
-
-    # Traitement de correction
-    clean_key = (
-        raw_key.replace("\\n", "\n").strip()
-    )  # Remplace les \\n et retire les espaces superflus
-    creds_dict["private_key"] = clean_key
+    # Récupération et décodage du secret Base64 global
+    encoded_json = st.secrets["gcp_service_account"]["json_base64"]
+    decoded_bytes = base64.b64decode(encoded_json)
+    creds_dict = json.loads(decoded_bytes.decode("utf-8"))
 
     gc = gspread.service_account_from_dict(creds_dict)
 
