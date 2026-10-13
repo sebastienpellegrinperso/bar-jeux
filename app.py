@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 
 # Configuration de la page
 st.set_page_config(
@@ -8,19 +9,19 @@ st.set_page_config(
 
 st.title("🎲 Ludotrotter Bar - Gestion de la Caisse et des Tables")
 
-# --- 1. INITIALISATION DES DONNÉES EN MÉMOIRE ---
-if "tables" not in st.session_state:
-  st.session_state.tables = {}
+# --- CONNEXION GOOGLE SHEETS ---
+# Création de la connexion
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-if "total_jour" not in st.session_state:
-  st.session_state.total_jour = 0.0
-
-if "mode_ajout_table" not in st.session_state:
-  st.session_state.mode_ajout_table = False
-
-# Initialisation de la carte des produits dans le state si elle n'existe pas
-if "carte_produits" not in st.session_state:
-  st.session_state.carte_produits = {
+# --- CHARGEMENT DE LA CARTE DEPUIS GOOGLE SHEETS ---
+try:
+  # Lit la feuille nommée "Carte" de ton Google Sheet
+  df_carte = conn.read(worksheet="Carte", ttl=0)
+  # On transforme le DataFrame en dictionnaire {"Nom du produit": Prix}
+  carte_produits = dict(zip(df_carte["Produit"], df_carte["Prix"]))
+except Exception as e:
+  # Fallback par sécurité si la feuille est vide au début
+  carte_produits = {
       "": 0.0,
       "Bière Blonde 33cl": 4.50,
       "Bière IPA 33cl": 5.00,
@@ -31,6 +32,16 @@ if "carte_produits" not in st.session_state:
       "Paquet de chips": 2.00,
       "Planche apéro": 12.00,
   }
+
+# --- INITIALISATION DU RESTE DES ÉTATS ---
+if "tables" not in st.session_state:
+  st.session_state.tables = {}
+
+if "total_jour" not in st.session_state:
+  st.session_state.total_jour = 0.0
+
+if "mode_ajout_table" not in st.session_state:
+  st.session_state.mode_ajout_table = False
 
 # --- 2. BARRE LATÉRALE : CAISSE ET ACTIONS GLOBALES ---
 with st.sidebar:
@@ -65,7 +76,6 @@ onglet_tables, onglet_carte = st.tabs(
 # ONGLET 1 : GESTION DES TABLES
 # ==========================================
 with onglet_tables:
-  # Formulaire d'ajout de table
   if st.session_state.mode_ajout_table:
     with st.container(border=True):
       st.subheader("Ouvrir une nouvelle table")
@@ -82,8 +92,7 @@ with onglet_tables:
             else:
               st.session_state.tables[nom_table_saisi] = {
                   "lignes": [
-                      {"produit": "", "qte": 0, "qte_reglee": 0}
-                      for _ in range(3)
+                      {"produit": "", "qte": 0, "qte_reglee": 0} for _ in range(3)
                   ],
               }
               st.session_state.mode_ajout_table = False
@@ -96,7 +105,7 @@ with onglet_tables:
           st.rerun()
 
   noms_tables = list(st.session_state.tables.keys())
-  produits_liste = list(st.session_state.carte_produits.keys())
+  produits_liste = list(carte_produits.keys())
 
   if not noms_tables and not st.session_state.mode_ajout_table:
     st.info(
@@ -114,7 +123,6 @@ with onglet_tables:
 
       with col_actuelle:
         with st.container(border=True):
-
           st.markdown(f"### 🪑 **{nom_table}**")
 
           h1, h2, h3, h4, h5 = st.columns([3, 1.2, 1.2, 1, 1])
@@ -174,7 +182,7 @@ with onglet_tables:
             table_data["lignes"][idx]["qte"] = qte_choisie
             table_data["lignes"][idx]["qte_reglee"] = qte_reglee
 
-            prix_u = st.session_state.carte_produits.get(produit_choisi, 0.0)
+            prix_u = carte_produits.get(produit_choisi, 0.0)
             total_ligne = qte_choisie * prix_u
             paye_ligne = qte_reglee * prix_u
             reste_ligne = total_ligne - paye_ligne
@@ -226,18 +234,20 @@ with onglet_tables:
 
 
 # ==========================================
-# ONGLET 2 : GESTION DE LA CARTE ET DES PRIX
+# ONGLET 2 : GESTION DE LA CARTE ET DES PRIX (LIÉ À GOOGLE SHEETS)
 # ==========================================
 with onglet_carte:
   st.subheader("📜 Modifier la carte et les tarifs")
   st.markdown(
-      "Modifiez les prix directement dans le tableau ci-dessous, ou ajoutez de"
-      " nouveaux produits."
+      "Les modifications faites ici sont enregistrées durablement dans la"
+      " base Google Sheets."
   )
 
+  # Formulaire de modification / suppression de la carte existante
+  produits_modifies = carte_produits.copy()
   produits_a_supprimer = []
 
-  for prod, prix in list(st.session_state.carte_produits.items()):
+  for prod, prix in list(carte_produits.items()):
     if prod == "":
       continue
 
@@ -254,14 +264,31 @@ with onglet_carte:
           key=f"prix_mod_{prod}",
           label_visibility="collapsed",
       )
-      st.session_state.carte_produits[prod] = nouveau_prix
+      produits_modifies[prod] = nouveau_prix
     with col_p3:
       if st.button("🗑️ Supprimer", key=f"del_prod_{prod}"):
         produits_a_supprimer.append(prod)
 
+  # Suppression des produits ciblés
   if produits_a_supprimer:
     for p in produits_a_supprimer:
-      del st.session_state.carte_produits[p]
+      del produits_modifies[p]
+
+    # Sauvegarde immédiate dans Google Sheets
+    df_to_save = pd.DataFrame(
+        list(produits_modifies.items()), columns=["Produit", "Prix"]
+    )
+    conn.update(worksheet="Carte", data=df_to_save)
+    st.success("Mise à jour enregistrée !")
+    st.rerun()
+
+  # Bouton global pour valider les modifications de prix
+  if st.button("💾 Enregistrer les modifications de prix"):
+    df_to_save = pd.DataFrame(
+        list(produits_modifies.items()), columns=["Produit", "Prix"]
+    )
+    conn.update(worksheet="Carte", data=df_to_save)
+    st.success("Modifications de prix enregistrées avec succès dans le cloud !")
     st.rerun()
 
   st.divider()
@@ -279,11 +306,17 @@ with onglet_carte:
     submitted = st.form_submit_button("Ajouter à la carte")
     if submitted:
       if nouveau_nom.strip():
-        if nouveau_nom in st.session_state.carte_produits:
+        nom_propre = nouveau_nom.strip()
+        if nom_propre in produits_modifies:
           st.warning("Ce produit existe déjà.")
         else:
-          st.session_state.carte_produits[nouveau_nom.strip()] = nouveau_tarif
-          st.success(f"Produit '{nouveau_nom}' ajouté avec succès !")
+          produits_modifies[nom_propre] = nouveau_tarif
+          # Sauvegarde dans Google Sheets
+          df_to_save = pd.DataFrame(
+              list(produits_modifies.items()), columns=["Produit", "Prix"]
+          )
+          conn.update(worksheet="Carte", data=df_to_save)
+          st.success(f"Produit '{nom_propre}' ajouté et sauvegardé !")
           st.rerun()
       else:
         st.error("Veuillez indiquer un nom de produit valide.")
