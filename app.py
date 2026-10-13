@@ -17,18 +17,17 @@ def get_gsheet_client():
   if os.path.exists("service_account.json"):
     gc = gspread.service_account(filename="service_account.json")
   else:
-    # 1. Copie des secrets en dictionnaire
+    # Récupération des secrets sous forme de dictionnaire standard
     creds_dict = dict(st.secrets["gcp_service_account"])
+    
+    # Nettoyage et normalisation de la clé privée pour éviter l'erreur de padding
+    private_key = creds_dict["private_key"]
+    if isinstance(private_key, str):
+      # Remplace les éventuels \n textuels par de vrais retours à la ligne
+      private_key = private_key.replace("\\n", "\n")
+      creds_dict["private_key"] = private_key
 
-    # 2. Nettoyage complet de la clé privée
-    pkey = creds_dict["private_key"]
-
-    # Remplace les double anti-slashs s'il y en a
-    pkey = pkey.replace("\\n", "\n")
-
-    # S'assure de conserver les en-têtes PEM correctement formatés
-    creds_dict["private_key"] = pkey
-
+    # Utilisation de la méthode de dictionnaire sécurisée de gspread
     gc = gspread.service_account_from_dict(creds_dict)
 
   sh = gc.open("Ludotrotter_Base_Donnees")
