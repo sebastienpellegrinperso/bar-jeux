@@ -13,13 +13,16 @@ st.set_page_config(
 st.title("🎲 Ludotrotter Bar - Gestion de la Caisse et des Tables")
 
 
-# Connexion directe et sécurisée
+# Connexion directe et sécurisée (compatible local et Cloud Streamlit)
+@st.cache_resource
 @st.cache_resource
 def get_gsheet_client():
   if os.path.exists("service_account.json"):
     gc = gspread.service_account(filename="service_account.json")
   else:
     secrets = st.secrets["gcp_service_account"]
+    
+    # Reconstitution propre du dictionnaire de credentials à partir du tableau de lignes
     creds_dict = {
         "type": secrets["type"],
         "project_id": secrets["project_id"],
@@ -33,6 +36,7 @@ def get_gsheet_client():
         "client_x509_cert_url": secrets["client_x509_cert_url"],
         "universe_domain": secrets["universe_domain"],
     }
+    
     gc = gspread.service_account_from_dict(creds_dict)
 
   sh = gc.open("Ludotrotter_Base_Donnees")
@@ -218,7 +222,7 @@ with onglet_tables:
         with st.container(border=True):
           st.markdown(f"### 🪑 **{nom_table}**")
 
-          h1, h2, h3, h4, h5 = st.columns([2.6, 1.5, 1.5, 1, 1])
+          h1, h2, h3, h4, h5 = st.columns([3, 1.2, 1.2, 1, 1])
           h1.caption("**Produit**")
           h2.caption("**Qté Cmd**")
           h3.caption("**Qté Payée**")
@@ -229,7 +233,7 @@ with onglet_tables:
           total_deja_regle = 0.0
 
           for idx, ligne in enumerate(table_data["lignes"]):
-            cc1, cc2, cc3, cc4, cc5 = st.columns([2.6, 1.5, 1.5, 1, 1])
+            cc1, cc2, cc3, cc4, cc5 = st.columns([3, 1.2, 1.2, 1, 1])
 
             with cc1:
               prod_actuel = ligne["produit"]
@@ -245,51 +249,39 @@ with onglet_tables:
                   key=f"prod_{nom_table}_{idx}",
                   label_visibility="collapsed",
               )
-              ligne["produit"] = produit_choisi
 
-            # Boutons tactiles pour la Quantité Commandée
             with cc2:
-              sub_c1, sub_c2, sub_c3 = st.columns([1, 1.2, 1])
-              if sub_c1.button("➖", key=f"m_cmd_{nom_table}_{idx}"):
-                if ligne["qte"] > 0:
-                  ligne["qte"] -= 1
-                  if ligne["qte_reglee"] > ligne["qte"]:
-                    ligne["qte_reglee"] = ligne["qte"]
-                  sauvegarder_tables_dans_sheet()
-                  st.rerun()
-              sub_c2.markdown(
-                  f"<div style='text-align: center; font-weight: bold;"
-                  f" padding-top: 4px;'>{ligne['qte']}</div>",
-                  unsafe_allow_html=True,
+              qte_choisie = st.number_input(
+                  f"Qté Cmd {idx+1} ({nom_table})",
+                  min_value=0,
+                  max_value=20,
+                  value=ligne["qte"],
+                  key=f"qte_{nom_table}_{idx}",
+                  label_visibility="collapsed",
               )
-              if sub_c3.button("➕", key=f"p_cmd_{nom_table}_{idx}"):
-                if ligne["qte"] < 20:
-                  ligne["qte"] += 1
-                  sauvegarder_tables_dans_sheet()
-                  st.rerun()
 
-            # Boutons tactiles pour la Quantité Réglée
+            qte_reglee_max = max(0, qte_choisie)
+            qte_reglee_actuelle = min(
+                ligne.get("qte_reglee", 0), qte_reglee_max
+            )
+
             with cc3:
-              sub_r1, sub_r2, sub_r3 = st.columns([1, 1.2, 1])
-              if sub_r1.button("➖", key=f"m_reg_{nom_table}_{idx}"):
-                if ligne["qte_reglee"] > 0:
-                  ligne["qte_reglee"] -= 1
-                  sauvegarder_tables_dans_sheet()
-                  st.rerun()
-              sub_r2.markdown(
-                  f"<div style='text-align: center; font-weight: bold;"
-                  f" padding-top: 4px;'>{ligne['qte_reglee']}</div>",
-                  unsafe_allow_html=True,
+              qte_reglee = st.number_input(
+                  f"Qté Payée {idx+1} ({nom_table})",
+                  min_value=0,
+                  max_value=qte_reglee_max,
+                  value=qte_reglee_actuelle,
+                  key=f"qtereg_{nom_table}_{idx}",
+                  label_visibility="collapsed",
               )
-              if sub_r3.button("➕", key=f"p_reg_{nom_table}_{idx}"):
-                if ligne["qte_reglee"] < ligne["qte"]:
-                  ligne["qte_reglee"] += 1
-                  sauvegarder_tables_dans_sheet()
-                  st.rerun()
+
+            table_data["lignes"][idx]["produit"] = produit_choisi
+            table_data["lignes"][idx]["qte"] = qte_choisie
+            table_data["lignes"][idx]["qte_reglee"] = qte_reglee
 
             prix_u = carte_produits.get(produit_choisi, 0.0)
-            total_ligne = ligne["qte"] * prix_u
-            paye_ligne = ligne["qte_reglee"] * prix_u
+            total_ligne = qte_choisie * prix_u
+            paye_ligne = qte_reglee * prix_u
             reste_ligne = total_ligne - paye_ligne
 
             total_table_global += total_ligne
@@ -353,7 +345,9 @@ with onglet_carte:
       " base Google Sheets."
   )
 
-  produits_modifies = {k: v for k, v in carte_produits.items() if k != ""}
+  produits_modifies = {
+      k: v for k, v in carte_produits.items() if k != ""
+  }
   produits_a_supprimer = []
 
   for prod, prix in list(produits_modifies.items()):
