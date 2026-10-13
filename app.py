@@ -15,13 +15,28 @@ st.title("🎲 Ludotrotter Bar - Gestion de la Caisse et des Tables")
 
 # Connexion directe et sécurisée (compatible local et Cloud Streamlit)
 @st.cache_resource
+@st.cache_resource
 def get_gsheet_client():
   if os.path.exists("service_account.json"):
     gc = gspread.service_account(filename="service_account.json")
   else:
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    # Conversion des \n de texte en vrais sauts de ligne pour la cryptographie
-    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    secrets = st.secrets["gcp_service_account"]
+    
+    # Reconstitution propre du dictionnaire de credentials à partir du tableau de lignes
+    creds_dict = {
+        "type": secrets["type"],
+        "project_id": secrets["project_id"],
+        "private_key_id": secrets["private_key_id"],
+        "private_key": "\n".join(secrets["private_key_lines"]),
+        "client_email": secrets["client_email"],
+        "client_id": secrets["client_id"],
+        "auth_uri": secrets["auth_uri"],
+        "token_uri": secrets["token_uri"],
+        "auth_provider_x509_cert_url": secrets["auth_provider_x509_cert_url"],
+        "client_x509_cert_url": secrets["client_x509_cert_url"],
+        "universe_domain": secrets["universe_domain"],
+    }
+    
     gc = gspread.service_account_from_dict(creds_dict)
 
   sh = gc.open("Ludotrotter_Base_Donnees")
