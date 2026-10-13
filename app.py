@@ -19,11 +19,9 @@ def get_gsheet_client():
   if os.path.exists("service_account.json"):
     gc = gspread.service_account(filename="service_account.json")
   else:
-    # Récupération et décodage du secret Base64 global
-    encoded_json = st.secrets["gcp_service_account"]["json_base64"]
-    decoded_bytes = base64.b64decode(encoded_json)
-    creds_dict = json.loads(decoded_bytes.decode("utf-8"))
-
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    # Conversion des \n de texte en vrais sauts de ligne pour la cryptographie
+    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
     gc = gspread.service_account_from_dict(creds_dict)
 
   sh = gc.open("Ludotrotter_Base_Donnees")
