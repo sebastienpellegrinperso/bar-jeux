@@ -1,6 +1,6 @@
+import gspread
 import pandas as pd
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 
 # Configuration de la page
 st.set_page_config(
@@ -9,18 +9,34 @@ st.set_page_config(
 
 st.title("🎲 Ludotrotter Bar - Gestion de la Caisse et des Tables")
 
-# --- CONNEXION GOOGLE SHEETS ---
-# Création de la connexion
-conn = st.connection("gsheets", type=GSheetsConnection)
+
+# Connexion directe et sécurisée via le fichier JSON à la racine et le nom du fichier Google Sheets
+@st.cache_resource
+def get_gsheet_client():
+  gc = gspread.service_account(filename="service_account.json")
+  sh = gc.open("Ludotrotter_Base_Donnees")
+  return sh
+
+
+try:
+  sh = get_gsheet_client()
+except Exception as e:
+  st.error(
+      f"Erreur de connexion au fichier Google Sheets (vérifie le partage avec"
+      f" l'e-mail du robot) : {e}"
+  )
+  st.stop()
 
 # --- CHARGEMENT DE LA CARTE DEPUIS GOOGLE SHEETS ---
 try:
-  # Lit la feuille nommée "Carte" de ton Google Sheet
-  df_carte = conn.read(worksheet="Carte", ttl=0)
-  # On transforme le DataFrame en dictionnaire {"Nom du produit": Prix}
-  carte_produits = dict(zip(df_carte["Produit"], df_carte["Prix"]))
+  worksheet_carte = sh.worksheet("Carte")
+  data_carte = worksheet_carte.get_all_records()
+  df_carte = pd.DataFrame(data_carte)
+  # On ajoute une option vide au tout début de la liste des produits disponibles
+  carte_produits = {"": 0.0}
+  for _, row in df_carte.iterrows():
+    carte_produits[row["Produit"]] = row["Prix"]
 except Exception as e:
-  # Fallback par sécurité si la feuille est vide au début
   carte_produits = {
       "": 0.0,
       "Bière Blonde 33cl": 4.50,
@@ -33,9 +49,60 @@ except Exception as e:
       "Planche apéro": 12.00,
   }
 
-# --- INITIALISATION DU RESTE DES ÉTATS ---
+# --- CHARGEMENT DES TABLES ACTIVES DEPUIS GOOGLE SHEETS ---
 if "tables" not in st.session_state:
-  st.session_state.tables = {}
+  try:
+    worksheet_tables = sh.worksheet("Tables_Actives")
+    data_tables = worksheet_tables.get_all_records()
+    
+    tables_restaurees = {}
+    for row in data_tables:
+      nom = row.get("Table")
+      prod = row.get("Produit", "")
+      qte = int(row.get("QteCmd", 0) or 0)
+      qte_reg = int(row.get("QteReglee", 0) or 0)
+
+      if nom:
+        if nom not in tables_restaurees:
+          tables_restaurees[nom] = {"lignes": []}
+        tables_restaurees[nom]["lignes"].append({
+            "produit": prod,
+            "qte": qte,
+            "qte_reglee": qte_reg,
+        })
+    
+    for nom in tables_restaurees:
+      if not tables_restaurees[nom]["lignes"]:
+        tables_restaurees[nom]["lignes"] = [{"produit": "", "qte": 0, "qte_reglee": 0} for _ in range(3)]
+
+    st.session_state.tables = tables_restaurees
+  except Exception:
+    st.session_state.tables = {}
+
+
+# Fonction utilitaire pour sauvegarder l'état des tables dans Google Sheets
+def sauvegarder_tables_dans_sheet():
+  try:
+    try:
+      worksheet_tables = sh.worksheet("Tables_Actives")
+    except Exception:
+      worksheet_tables = sh.add_worksheet(title="Tables_Actives", rows=100, cols=5)
+
+    lignes_a_sauver = [["Table", "Produit", "QteCmd", "QteReglee"]]
+    for nom_table, table_data in st.session_state.tables.items():
+      for ligne in table_data["lignes"]:
+        lignes_a_sauver.append([
+            nom_table,
+            ligne["produit"],
+            ligne["qte"],
+            ligne["qte_reglee"],
+        ])
+
+    worksheet_tables.clear()
+    worksheet_tables.update(lignes_a_sauver)
+  except Exception as e:
+    st.warning(f"Impossible de sauvegarder les tables dans le cloud : {e}")
+
 
 if "total_jour" not in st.session_state:
   st.session_state.total_jour = 0.0
@@ -62,6 +129,7 @@ with st.sidebar:
       st.session_state.tables = {}
       st.session_state.total_jour = 0.0
       st.session_state.mode_ajout_table = False
+      sauvegarder_tables_dans_sheet()
       st.success("Réinitialisation globale effectuée !")
       st.rerun()
     else:
@@ -96,6 +164,7 @@ with onglet_tables:
                   ],
               }
               st.session_state.mode_ajout_table = False
+              sauvegarder_tables_dans_sheet()
               st.rerun()
           else:
             st.error("Veuillez saisir un nom ou un numéro valide.")
@@ -195,6 +264,8 @@ with onglet_tables:
             with cc5:
               st.write(f"**{reste_ligne:.2f}€**")
 
+          sauvegarder_tables_dans_sheet()
+
           if len(table_data["lignes"]) < 10:
             if st.button(
                 "➕ Ligne",
@@ -204,6 +275,7 @@ with onglet_tables:
               table_data["lignes"].append(
                   {"produit": "", "qte": 0, "qte_reglee": 0}
               )
+              sauvegarder_tables_dans_sheet()
               st.rerun()
 
           reste_a_payer_total = total_table_global - total_deja_regle
@@ -223,6 +295,7 @@ with onglet_tables:
             ):
               st.session_state.total_jour += total_table_global
               del st.session_state.tables[nom_table]
+              sauvegarder_tables_dans_sheet()
               st.rerun()
 
           with b2:
@@ -230,11 +303,12 @@ with onglet_tables:
                 "🔄 Vider", key=f"vider_{nom_table}", use_container_width=True
             ):
               del st.session_state.tables[nom_table]
+              sauvegarder_tables_dans_sheet()
               st.rerun()
 
 
 # ==========================================
-# ONGLET 2 : GESTION DE LA CARTE ET DES PRIX (LIÉ À GOOGLE SHEETS)
+# ONGLET 2 : GESTION DE LA CARTE ET DES PRIX
 # ==========================================
 with onglet_carte:
   st.subheader("📜 Modifier la carte et les tarifs")
@@ -243,14 +317,13 @@ with onglet_carte:
       " base Google Sheets."
   )
 
-  # Formulaire de modification / suppression de la carte existante
-  produits_modifies = carte_produits.copy()
+  # On exclut la ligne vide pour l'affichage de modification de la carte
+  produits_modifies = {
+      k: v for k, v in carte_produits.items() if k != ""
+  }
   produits_a_supprimer = []
 
-  for prod, prix in list(carte_produits.items()):
-    if prod == "":
-      continue
-
+  for prod, prix in list(produits_modifies.items()):
     col_p1, col_p2, col_p3 = st.columns([3, 2, 1])
     with col_p1:
       st.write(f"**{prod}**")
@@ -269,25 +342,28 @@ with onglet_carte:
       if st.button("🗑️ Supprimer", key=f"del_prod_{prod}"):
         produits_a_supprimer.append(prod)
 
-  # Suppression des produits ciblés
   if produits_a_supprimer:
     for p in produits_a_supprimer:
       del produits_modifies[p]
 
-    # Sauvegarde immédiate dans Google Sheets
     df_to_save = pd.DataFrame(
         list(produits_modifies.items()), columns=["Produit", "Prix"]
     )
-    conn.update(worksheet="Carte", data=df_to_save)
+    worksheet_carte.clear()
+    worksheet_carte.update(
+        [df_to_save.columns.values.tolist()] + df_to_save.values.tolist()
+    )
     st.success("Mise à jour enregistrée !")
     st.rerun()
 
-  # Bouton global pour valider les modifications de prix
   if st.button("💾 Enregistrer les modifications de prix"):
     df_to_save = pd.DataFrame(
         list(produits_modifies.items()), columns=["Produit", "Prix"]
     )
-    conn.update(worksheet="Carte", data=df_to_save)
+    worksheet_carte.clear()
+    worksheet_carte.update(
+        [df_to_save.columns.values.tolist()] + df_to_save.values.tolist()
+    )
     st.success("Modifications de prix enregistrées avec succès dans le cloud !")
     st.rerun()
 
@@ -311,11 +387,14 @@ with onglet_carte:
           st.warning("Ce produit existe déjà.")
         else:
           produits_modifies[nom_propre] = nouveau_tarif
-          # Sauvegarde dans Google Sheets
           df_to_save = pd.DataFrame(
               list(produits_modifies.items()), columns=["Produit", "Prix"]
           )
-          conn.update(worksheet="Carte", data=df_to_save)
+          worksheet_carte.clear()
+          worksheet_carte.update(
+              [df_to_save.columns.values.tolist()]
+              + df_to_save.values.tolist()
+          )
           st.success(f"Produit '{nom_propre}' ajouté et sauvegardé !")
           st.rerun()
       else:
